@@ -1,0 +1,40 @@
+# Large data files
+*.tif
+*.tiff
+*.hdr
+
+# Downloaded geodata
+gadm/
+*.rds
+
+# R temporary files
+.Rhistory
+.RData
+.Ruserdata
+Rplots.pdf
+*.Rproj
+.Rproj.user/
+
+# R package installation
+.Rcheck/
+.Rinstignore
+
+# Temporary files
+*.tmp
+*.temp
+*~
+.DS_Store
+Thumbs.db
+
+# Output files (uncomment if you don't want to track output images)
+# *.png
+# *.jpg
+# *.jpeg
+
+# Cache directories
+.cache/
+__pycache__/
+
+# Log files
+*.log
+
