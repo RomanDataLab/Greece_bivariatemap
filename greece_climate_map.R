@@ -109,6 +109,14 @@ temp_prec_country <- terra::crop(
     mask = TRUE
 )
 
+# Note: TIFF saving commented out due to disk space constraints
+# Uncomment below to save cropped raster as TIFF:
+# terra::writeRaster(
+#     temp_prec_country,
+#     filename = "greece_temp_prec_cropped.tif",
+#     overwrite = TRUE
+# )
+
 # Obtain AWS tiles DEM data from elevatr
 # convert to terra SpatRaster and crop
 dem <- elevatr::get_elev_raster(
@@ -125,6 +133,29 @@ temp_prec_resampled <- terra::resample(
     y = dem, method = "bilinear"
 ) |> terra::project(target_crs)
 
+# Project DEM to target CRS and resample to match climate data exactly
+dem_projected <- terra::project(dem, target_crs)
+dem_resampled <- terra::resample(
+    x = dem_projected,
+    y = temp_prec_resampled,
+    method = "bilinear"
+)
+
+# Note: TIFF saving commented out due to disk space constraints
+# Uncomment below to save processed rasters as TIFF files:
+# terra::writeRaster(
+#     temp_prec_resampled,
+#     filename = "greece_temp_prec_processed.tif",
+#     overwrite = TRUE,
+#     filetype = "GTiff"
+# )
+# terra::writeRaster(
+#     dem_resampled,
+#     filename = "greece_dem_processed.tif",
+#     overwrite = TRUE,
+#     filetype = "GTiff"
+# )
+
 # plot the resampled raster
 terra::plot(temp_prec_resampled)
 
@@ -132,6 +163,13 @@ terra::plot(temp_prec_resampled)
 temp_prec_df <- as.data.frame(
     temp_prec_resampled, xy = TRUE
 )
+
+# Get exact extent from the data for consistent mapping
+data_xlim <- c(min(temp_prec_df$x, na.rm = TRUE), max(temp_prec_df$x, na.rm = TRUE))
+data_ylim <- c(min(temp_prec_df$y, na.rm = TRUE), max(temp_prec_df$y, na.rm = TRUE))
+
+# Calculate aspect ratio to ensure both maps match
+data_aspect_ratio <- (data_ylim[2] - data_ylim[1]) / (data_xlim[2] - data_xlim[1])
 
 # 5. BREAKS, PALETTE AND PLOT THEME
 #----------------------------------
@@ -155,11 +193,11 @@ theme_for_the_win <- function(){
             fill = "white", color = NA
         ),
         plot.title = element_text(
-            color = "grey10", hjust = .5,
+            color = "grey10", hjust = 0.2,
             face = "bold", vjust = -1
         ),
         plot.subtitle = element_text(
-            hjust = .5, vjust = -1
+            hjust = 0.2, vjust = -1
         ),
         plot.caption = element_text(
             size = 9, color = "grey20",
@@ -192,11 +230,17 @@ map <- ggplot(breaks) +
     ) +
     coord_sf(
         crs = target_crs,
-        xlim = c(greece_bbox["xmin"], greece_bbox["xmax"]),
-        ylim = c(greece_bbox["ymin"], greece_bbox["ymax"]),
+        xlim = data_xlim,
+        ylim = data_ylim,
         expand = FALSE
     ) +
-    theme_for_the_win()
+    theme_for_the_win() +
+    theme(
+        legend.position = c(1, 0),
+        legend.justification = c(1, 0),
+        legend.margin = margin(t = 0, r = 0, b = 0, l = 0),
+        legend.direction = "vertical"
+    )
 
 # create the legend for the bivariate map
 legend <- biscale::bi_legend(
@@ -209,37 +253,46 @@ legend <- biscale::bi_legend(
     size = 8
 )
 
+# Calculate plot dimensions based on aspect ratio for consistent proportions
+base_width <- 7
+plot_height <- base_width * data_aspect_ratio
+
 # combine the map and legend using cowplot
+# Move bivariate legend to upper right corner
 full_map <- cowplot::ggdraw() +
     cowplot::draw_plot(
         plot = map, x = 0, y = 0,
         width = 1, height = 1
     ) +
     cowplot::draw_plot(
-        plot = legend, x = .05, y = .13,
+        plot = legend, x = .70, y = .70,
         width = .25, height = .25
     )
 
 # display the final map with legend
 print(full_map)
 
-# save as PNG file
+# save as PNG file with matching aspect ratio
 ggsave(
     filename = "greece_bivariate_2d.png",
-    width = 7, height = 7, dpi = 600,
+    width = base_width, height = plot_height, dpi = 600,
     device = "png", bg = "white", full_map
 )
 
 # 7. CREATE TERRAIN LAYER
 #------------------------
 
-# project and convert to DEM to dataframe
-dem_df <- dem |>
-    terra::project(target_crs) |>
-    as.data.frame(xy = TRUE, na.rm = TRUE)
+# convert resampled DEM to dataframe (already projected and aligned)
+dem_df <- as.data.frame(
+    dem_resampled, xy = TRUE, na.rm = TRUE
+)
 
 # rename the third column to "dem"
 names(dem_df)[3] <- "dem"
+
+# Ensure DEM dataframe matches the exact same extent as climate data
+dem_df <- dem_df[dem_df$x >= data_xlim[1] & dem_df$x <= data_xlim[2] &
+                 dem_df$y >= data_ylim[1] & dem_df$y <= data_ylim[2], ]
 
 # create the terrain layer map
 dem_map <- ggplot(
@@ -255,8 +308,8 @@ labs(
 ) +
 coord_sf(
     crs = target_crs,
-    xlim = c(greece_bbox["xmin"], greece_bbox["xmax"]),
-    ylim = c(greece_bbox["ymin"], greece_bbox["ymax"]),
+    xlim = data_xlim,
+    ylim = data_ylim,
     expand = FALSE
 ) +
 theme_for_the_win() +
@@ -265,46 +318,71 @@ theme(legend.position = "none")
 # 8. RENDER 3D SCENE
 #-------------------
 
-rayshader::plot_gg(
-    ggobj = full_map,
-    ggobj_height = dem_map,
-    width = 7,
-    height = 7,
-    windowsize = c(600, 600),
-    scale = 100,
-    shadow = TRUE,
-    shadow_intensity = 1,
-    phi = 87, theta = 0, zoom = .56,
-    multicore = TRUE
-)
+cat("Starting 3D rendering...\n")
 
-# zoom out
-rayshader::render_camera(zoom = .6)
-
-# 9. LIGHTS
-#----------
-
-url <- "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/brown_photostudio_02_4k.hdr"
-hdri_file <- basename(url)
-
-download.file(
-    url = url,
-    destfile = hdri_file,
-    mode = "wb"
-)
-
-# 10. RENDER 3D OBJECT
-#---------------------
-
-rayshader::render_highquality(
-    filename = "greece-bivariate-3d.png",
-    preview = TRUE,
-    light = FALSE,
-    environment_light = hdri_file,
-    intensity = 1,
-    rotate_env = 90,
-    parallel = TRUE,
-    width = 2000, height = 2000,
-    interactive = FALSE
-)
+# Optimize 3D rendering for limited resources
+tryCatch({
+    # Use smaller window size and scale to reduce memory usage
+    rayshader::plot_gg(
+        ggobj = full_map,
+        ggobj_height = dem_map,
+        width = base_width,
+        height = plot_height,
+        windowsize = c(400, round(400 * data_aspect_ratio)),  # Reduced from 600
+        scale = 50,  # Reduced from 100 for less memory
+        shadow = TRUE,
+        shadow_intensity = 0.8,  # Slightly reduced
+        phi = 87, theta = 0, zoom = .56,
+        multicore = FALSE  # Disable multicore to reduce memory
+    )
+    
+    cat("3D scene rendered successfully\n")
+    
+    # zoom out
+    rayshader::render_camera(zoom = .6)
+    
+    # 9. LIGHTS
+    #----------
+    
+    url <- "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/brown_photostudio_02_4k.hdr"
+    hdri_file <- basename(url)
+    
+    # Only download if file doesn't exist
+    if (!file.exists(hdri_file)) {
+        cat("Downloading HDRI lighting file...\n")
+        download.file(
+            url = url,
+            destfile = hdri_file,
+            mode = "wb"
+        )
+    } else {
+        cat("Using existing HDRI file\n")
+    }
+    
+    # 10. RENDER 3D OBJECT
+    #---------------------
+    
+    cat("Rendering high-quality 3D image...\n")
+    
+    # Use lower resolution to save disk space
+    rayshader::render_highquality(
+        filename = "greece-bivariate-3d.png",
+        preview = TRUE,
+        light = FALSE,
+        environment_light = hdri_file,
+        intensity = 1,
+        rotate_env = 90,
+        parallel = FALSE,  # Disable parallel to reduce memory
+        width = 1200, height = round(1200 * data_aspect_ratio),  # Reduced from 2000
+        interactive = FALSE
+    )
+    
+    cat("3D map saved as: greece-bivariate-3d.png\n")
+    
+}, error = function(e) {
+    cat("Warning: 3D rendering failed due to resource constraints:\n")
+    cat(paste("Error:", conditionMessage(e), "\n"))
+    cat("2D map (greece_bivariate_2d.png) was created successfully.\n")
+    cat("To create 3D map, free up disk space (need ~3GB free).\n")
+})
 
